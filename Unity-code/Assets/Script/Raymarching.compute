@@ -1,0 +1,283 @@
+﻿#pragma kernel CSMain
+
+Texture2D<float4> Source;
+RWTexture2D<float4> Destination;
+
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+
+float _Scale;
+float3 _Offset;
+float _Angle1;
+float _Angle2;
+int   _n;
+
+float3 _colourAMix;
+float3 _colourBMix;
+float _darkness;
+float _blackAndWhite;
+
+bool _onPlaneRenderOnly;
+float4 _Plane;
+float3 _PlaneNormal;
+float3 _BallCenter;
+float _BallRad;
+
+float3 _BackGroundColourA;
+float3 _BackGroundColourB;
+
+float3 _EndPoint;
+float _EndRad;
+
+
+
+float3 _Light;
+bool positionLight;
+
+
+
+static const float maxDst = 80;
+static const float epsilon = 0.1f;
+static const float shadowBias = epsilon * 50;
+
+struct Ray {
+    float3 origin;
+    float3 direction;
+};
+
+float SphereDistance(float3 eye, float3 centre, float radius) {
+    return distance(eye, centre) - radius;
+}
+
+float PlaneDistance(float3 eye) {
+	float temp1 = _Plane.x * eye.x + _Plane.y * eye.y + _Plane.z * eye.z + _Plane.w;
+	float temp2 = sqrt(pow(_Plane.x, 2) + pow(_Plane.y, 2) + pow(_Plane.z, 2));
+	return temp1 / temp2;
+}
+
+
+float3 mengrFold(float3 vec) {
+	float a = min(vec.x - vec.y, 0.0);
+	vec.x -= a;
+	vec.y += a;
+	a = min(vec.x - vec.z, 0.0);
+	vec.x -= a;
+	vec.z += a;
+	a = min(vec.y - vec.z, 0.0);
+	vec.y -= a;
+	vec.z += a;
+	return vec;
+}
+
+float3 rotZ(float3 vec, float angle) {
+	float tempx = vec.x;
+	float tempy = vec.y;
+	vec.x = cos((angle)) * tempx + sin((angle)) * tempy;
+	vec.y = cos((angle)) * tempy - sin((angle)) * tempx;
+
+	return vec;
+}		  
+
+float3 rotX(float3 vec, float angle) {
+	float tempy = vec.y;
+	float tempz = vec.z;
+	vec.y = cos((angle)) * tempy + sin((angle)) * tempz;
+	vec.z = cos((angle)) * tempz - sin((angle)) * tempy;
+
+	return vec;
+}
+
+float de_box(float3 p, float3 s) {
+	float3 a = abs(p.xyz) - s;
+	return (min(max(max(a.x, a.y), a.z), 0.0) + length(max(a, 0.0))) / s.x;
+}
+
+float FinalDE(float3 vec) {
+	float Angle1 = _Angle1;
+	float Angle2 = _Angle2;
+	float Scale = _Scale;
+	float3 Offset = _Offset;
+	float temp;
+	int n = _n;
+	for (int i = 0; i < n; i++) {
+		vec.x = abs(vec.x);
+		//vec.y = abs(vec.y);
+		vec.z = abs(vec.z);
+		//vec = rotZ(vec, Angle2);
+		vec = mengrFold(vec);
+		vec = rotX(vec, Angle1);
+		vec = mengrFold(vec);
+		vec *= Scale;
+		vec -= Offset;
+	}
+	return de_box(vec, float3(6, 6, 6));
+}
+
+
+Ray CreateRay(float3 origin, float3 direction) {
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    return ray;
+}
+
+
+Ray CreateCameraRay(float2 uv) {
+
+    float3 origin = mul(_CameraToWorld, float4(0,0,0,1)).xyz;
+    float3 direction = mul(_CameraInverseProjection, float4(uv,0,1)).xyz;
+    direction = mul(_CameraToWorld, float4(direction,0)).xyz;
+    direction = normalize(direction);
+    return CreateRay(origin,direction);
+}
+
+
+float2 GetDst(float3 eye) {	   
+	
+	float whichpart = 0;
+	float temp = FinalDE(eye);
+	float circle = SphereDistance(eye, _BallCenter, _BallRad);
+	float end = SphereDistance(eye, _EndPoint, _EndRad);
+	if (end < temp) {
+		temp = end;
+		whichpart = 4;
+	}
+	if (_onPlaneRenderOnly) {
+		float plane = PlaneDistance(eye);
+		if (circle < plane) {
+			return float2(circle, 2);
+		}
+		if (plane > temp) {
+			whichpart = 1;
+			return float2(max(plane,temp), whichpart);
+		}
+	}
+	else {
+		float start = SphereDistance(eye, _BallCenter, _EndRad);
+		if (start < temp && start < end) {
+			return float2(start, 3);
+		}
+	}
+	return float2(temp, whichpart);
+} 
+
+float3 EstimateNormal(float3 p) {
+    float x = GetDst(float3(p.x + epsilon, p.y, p.z)).x - GetDst(float3(p.x - epsilon, p.y, p.z)).x;
+	float y = GetDst(float3(p.x, p.y + epsilon, p.z)).x - GetDst(float3(p.x, p.y - epsilon, p.z)).x;
+	float z = GetDst(float3(p.x, p.y, p.z + epsilon)).x - GetDst(float3(p.x, p.y, p.z - epsilon)).x;
+    return normalize(float3(x,y,z));
+}
+
+float CalculateShadow(Ray ray, float dstToShadePoint) {
+    float rayDst = 0;
+    int marchSteps = 0;
+    float shadowIntensity = 2;
+    float brightness = 1;
+
+    while (rayDst < dstToShadePoint) {
+        marchSteps ++;
+        float dst = GetDst(ray.origin).x;
+        
+        if (dst <= epsilon) {
+            return shadowIntensity;
+        }
+
+        brightness = min(brightness,dst*200);
+
+        ray.origin += ray.direction * dst;
+        rayDst += dst;
+    }
+    return shadowIntensity + (1-shadowIntensity) * brightness;
+}
+
+float4 DefaultSettings(Ray ray, float2 dst, int marchSteps) {
+
+	float3 pointOnSurface = ray.origin + ray.direction * dst.x;
+	float3 normal = EstimateNormal(pointOnSurface - ray.direction * epsilon);
+	float3 lightDir = (positionLight) ? normalize(_Light - ray.origin) : -_Light; 
+	float lighting = saturate(dot(normal, lightDir));
+	float3 col = 1;
+
+	float colourA = saturate(dot(normal, lightDir));
+	float colourB = saturate(marchSteps / 100.0);
+
+	float3 colourMix = 0;
+	float rim = marchSteps / _darkness;
+
+	float3 offsetPos = pointOnSurface + normal * shadowBias;
+	float3 dirToLight = (positionLight) ? normalize(_Light - offsetPos) : -_Light;
+
+	ray.origin = offsetPos;
+	ray.direction = dirToLight;
+
+	float dstToLight = (positionLight) ? distance(offsetPos, _Light) : maxDst;
+	float shadow = CalculateShadow(ray, dstToLight);
+
+	colourA = colourA * lighting;
+	colourB = colourB * shadow;
+
+	colourMix  = saturate(colourA * _colourAMix + colourB * _colourBMix);
+	
+	col = colourMix;
+	col = lerp(col, 1, _blackAndWhite) * rim;
+
+	if (dst.y == 1) {
+		col = float3(1, 1, 1);
+	}
+	else if (dst.y == 2) {
+		col = float3(0, 0, 0);
+	}	 
+	else if (dst.y == 3) {
+		col = float3(0, 1, 1);
+	}	
+	else if (dst.y == 4) {
+		col = float3(1, 0, 0);
+	}	 
+	 					 
+	return float4(col , 1);
+
+}
+
+float4 GetBGColor(float2 Coord, float width, float height) {
+	return lerp(float4(_BackGroundColourA, 1), float4(_BackGroundColourB, 1), (Coord.xy / float2(width, height)).y) / 255.0;
+}
+
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    uint width,height;
+    Destination.GetDimensions(width, height);
+
+    float2 uv = id.xy / float2(width,height) * 2 - 1;
+    float rayDst = 0;
+
+	float4 finalColour = GetBGColor(id.xy, width, height);
+
+    Ray ray = CreateCameraRay(uv);
+
+    int marchSteps = 0;
+	float marchDst = maxDst;
+
+    while (rayDst < maxDst && marchSteps < 50) {
+        
+		marchSteps ++;
+
+		float2 dst = GetDst(ray.origin);
+		if (dst.x == 1000) {
+			marchSteps = 100;
+		}
+        
+        if (dst.x <= epsilon) {
+			
+			finalColour = DefaultSettings(ray, dst, marchSteps);
+            break;
+
+        }
+
+        ray.origin += ray.direction * dst.x;
+        rayDst += dst.x;
+    }
+
+	Destination[id.xy] = finalColour;
+}

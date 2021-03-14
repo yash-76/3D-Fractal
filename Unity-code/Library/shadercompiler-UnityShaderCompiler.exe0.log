@@ -1,0 +1,21 @@
+Base path: D:/Unity_hub/2018.4.16f1/Editor/Data
+Cmd: initializeCompiler
+Cmd: initializeCompiler
+Cmd: preprocessCompute
+  insize=6744 outsize=6743 ok=1
+Cmd: preprocessCompute
+  insize=6742 outsize=6741 ok=1
+Cmd: compileComputeKernel
+  api=4 insize=6741 outsize=22145 ok=1
+Cmd: preprocessCompute
+  insize=6740 outsize=6739 ok=1
+Cmd: compileComputeKernel
+  api=4 insize=6739 outsize=22433 ok=1
+Cmd: preprocessCompute
+  insize=6742 outsize=6741 ok=1
+Cmd: compileComputeKernel
+  api=4 insize=6741 outsize=21345 ok=1
+Cmd: preprocessCompute
+  insize=6742 outsize=6741 ok=1
+Cmd: compileComputeKernel
+  api=4 insize=6741 outsize=21345 ok=1
